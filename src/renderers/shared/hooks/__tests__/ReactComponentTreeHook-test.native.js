@@ -23,7 +23,7 @@ describe('ReactComponentTreeHook', () => {
   var Text;
 
   beforeEach(() => {
-    jest.resetModuleRegistry();
+    jest.resetModules();
 
     React = require('React');
     ReactNative = require('ReactNative');
@@ -70,14 +70,19 @@ describe('ReactComponentTreeHook', () => {
       }
     }
 
-    function expectWrapperTreeToEqual(expectedTree) {
+    function expectWrapperTreeToEqual(expectedTree, andStayMounted) {
       ReactComponentTreeTestUtils.expectTree(rootInstance._debugID, {
         displayName: 'Wrapper',
         children: expectedTree ? [expectedTree] : [],
       });
+      var rootDisplayNames = ReactComponentTreeTestUtils.getRootDisplayNames();
+      var registeredDisplayNames = ReactComponentTreeTestUtils.getRegisteredDisplayNames();
       if (!expectedTree) {
-        expect(ReactComponentTreeTestUtils.getRootDisplayNames()).toEqual([]);
-        expect(ReactComponentTreeTestUtils.getRegisteredDisplayNames()).toEqual([]);
+        expectDev(rootDisplayNames).toEqual([]);
+        expectDev(registeredDisplayNames).toEqual([]);
+      } else if (andStayMounted) {
+        expectDev(rootDisplayNames).toContain('Wrapper');
+        expectDev(registeredDisplayNames).toContain('Wrapper');
       }
     }
 
@@ -88,12 +93,12 @@ describe('ReactComponentTreeHook', () => {
 
       // Mount a new tree or update the existing tree.
       ReactNative.render(<Wrapper />, 1);
-      expectWrapperTreeToEqual(expectedTree);
+      expectWrapperTreeToEqual(expectedTree, true);
 
       // Purging should have no effect
       // on the tree we expect to see.
       ReactComponentTreeHook.purgeUnmountedComponents();
-      expectWrapperTreeToEqual(expectedTree);
+      expectWrapperTreeToEqual(expectedTree, true);
     });
 
     // Unmounting the root node should purge
@@ -1659,35 +1664,35 @@ describe('ReactComponentTreeHook', () => {
   it('reports update counts', () => {
     ReactNative.render(<View />, 1);
     var viewID = ReactComponentTreeHook.getRootIDs()[0];
-    expect(ReactComponentTreeHook.getUpdateCount(viewID)).toEqual(0);
+    expectDev(ReactComponentTreeHook.getUpdateCount(viewID)).toEqual(0);
 
     ReactNative.render(<Image />, 1);
     var imageID = ReactComponentTreeHook.getRootIDs()[0];
-    expect(ReactComponentTreeHook.getUpdateCount(viewID)).toEqual(0);
-    expect(ReactComponentTreeHook.getUpdateCount(imageID)).toEqual(0);
+    expectDev(ReactComponentTreeHook.getUpdateCount(viewID)).toEqual(0);
+    expectDev(ReactComponentTreeHook.getUpdateCount(imageID)).toEqual(0);
 
     ReactNative.render(<Image />, 1);
-    expect(ReactComponentTreeHook.getUpdateCount(viewID)).toEqual(0);
-    expect(ReactComponentTreeHook.getUpdateCount(imageID)).toEqual(1);
+    expectDev(ReactComponentTreeHook.getUpdateCount(viewID)).toEqual(0);
+    expectDev(ReactComponentTreeHook.getUpdateCount(imageID)).toEqual(1);
 
     ReactNative.render(<Image />, 1);
-    expect(ReactComponentTreeHook.getUpdateCount(viewID)).toEqual(0);
-    expect(ReactComponentTreeHook.getUpdateCount(imageID)).toEqual(2);
+    expectDev(ReactComponentTreeHook.getUpdateCount(viewID)).toEqual(0);
+    expectDev(ReactComponentTreeHook.getUpdateCount(imageID)).toEqual(2);
 
     ReactNative.unmountComponentAtNode(1);
-    expect(ReactComponentTreeHook.getUpdateCount(viewID)).toEqual(0);
-    expect(ReactComponentTreeHook.getUpdateCount(imageID)).toEqual(0);
+    expectDev(ReactComponentTreeHook.getUpdateCount(viewID)).toEqual(0);
+    expectDev(ReactComponentTreeHook.getUpdateCount(imageID)).toEqual(0);
   });
 
   it('does not report top-level wrapper as a root', () => {
     ReactNative.render(<View><Image /></View>, 1);
-    expect(ReactComponentTreeTestUtils.getRootDisplayNames()).toEqual(['View']);
+    expectDev(ReactComponentTreeTestUtils.getRootDisplayNames()).toEqual(['View']);
 
     ReactNative.render(<View><Text /></View>, 1);
-    expect(ReactComponentTreeTestUtils.getRootDisplayNames()).toEqual(['View']);
+    expectDev(ReactComponentTreeTestUtils.getRootDisplayNames()).toEqual(['View']);
 
     ReactNative.unmountComponentAtNode(1);
-    expect(ReactComponentTreeTestUtils.getRootDisplayNames()).toEqual([]);
-    expect(ReactComponentTreeTestUtils.getRegisteredDisplayNames()).toEqual([]);
+    expectDev(ReactComponentTreeTestUtils.getRootDisplayNames()).toEqual([]);
+    expectDev(ReactComponentTreeTestUtils.getRegisteredDisplayNames()).toEqual([]);
   });
 });

@@ -14,72 +14,88 @@
 
 import type { ReactCoroutine } from 'ReactCoroutine';
 import type { Fiber } from 'ReactFiber';
+import type { HostContext } from 'ReactFiberHostContext';
+import type { FiberRoot } from 'ReactFiberRoot';
 import type { HostConfig } from 'ReactFiberReconciler';
 import type { ReifiedYield } from 'ReactReifiedYield';
 
-var ReactChildFiber = require('ReactChildFiber');
+var { reconcileChildFibers } = require('ReactChildFiber');
+var {
+  popContextProvider,
+} = require('ReactFiberContext');
 var ReactTypeOfWork = require('ReactTypeOfWork');
+var ReactTypeOfSideEffect = require('ReactTypeOfSideEffect');
 var {
   IndeterminateComponent,
   FunctionalComponent,
   ClassComponent,
-  HostContainer,
+  HostRoot,
   HostComponent,
+  HostText,
+  HostPortal,
   CoroutineComponent,
   CoroutineHandlerPhase,
   YieldComponent,
+  Fragment,
 } = ReactTypeOfWork;
+var {
+  Update,
+} = ReactTypeOfSideEffect;
 
-module.exports = function<T, P, I, C>(config : HostConfig<T, P, I, C>) {
+if (__DEV__) {
+  var ReactDebugCurrentFiber = require('ReactDebugCurrentFiber');
+}
 
-  const createInstance = config.createInstance;
-  const prepareUpdate = config.prepareUpdate;
+module.exports = function<T, P, I, TI, C, CX, CI>(
+  config : HostConfig<T, P, I, TI, C, CX, CI>,
+  hostContext : HostContext<C, CX>,
+) {
+  const {
+    createInstance,
+    createTextInstance,
+    appendInitialChild,
+    finalizeInitialChildren,
+    prepareUpdate,
+  } = config;
 
-  function markForPreEffect(workInProgress : Fiber) {
-    // Schedule a side-effect on this fiber, BEFORE the children's side-effects.
-    if (workInProgress.firstEffect) {
-      workInProgress.nextEffect = workInProgress.firstEffect;
-      workInProgress.firstEffect = workInProgress;
-    } else {
-      workInProgress.firstEffect = workInProgress;
-      workInProgress.lastEffect = workInProgress;
-    }
+  const {
+    getRootHostContainer,
+    popHostContext,
+    getHostContext,
+    popHostContainer,
+  } = hostContext;
+
+  function markUpdate(workInProgress : Fiber) {
+    // Tag the fiber with an update effect. This turns a Placement into
+    // an UpdateAndPlacement.
+    workInProgress.effectTag |= Update;
   }
 
-  /*
-  function markForPostEffect(workInProgress : Fiber) {
-    // Schedule a side-effect on this fiber, AFTER the children's side-effects.
-    if (workInProgress.lastEffect) {
-      workInProgress.lastEffect.nextEffect = workInProgress;
-    } else {
-      workInProgress.firstEffect = workInProgress;
-    }
-    workInProgress.lastEffect = workInProgress;
-  }
-  */
-
-  function transferOutput(child : ?Fiber, returnFiber : Fiber) {
-    // If we have a single result, we just pass that through as the output to
-    // avoid unnecessary traversal. When we have multiple output, we just pass
-    // the linked list of fibers that has the individual output values.
-    returnFiber.output = (child && !child.sibling) ? child.output : child;
-    returnFiber.memoizedProps = returnFiber.pendingProps;
-  }
-
-  function recursivelyFillYields(yields, output : ?Fiber | ?ReifiedYield) {
-    if (!output) {
-      // Ignore nulls etc.
-    } else if (output.tag !== undefined) { // TODO: Fix this fragile duck test.
-      // Detect if this is a fiber, if so it is a fragment result.
-      // $FlowFixMe: Refinement issue.
-      var item = (output : Fiber);
-      do {
-        recursivelyFillYields(yields, item.output);
-        item = item.sibling;
-      } while (item);
-    } else {
-      // $FlowFixMe: Refinement issue. If it is not a Fiber or null, it is a yield
-      yields.push(output);
+  function appendAllYields(yields : Array<ReifiedYield>, workInProgress : Fiber) {
+    let node = workInProgress.child;
+    while (node) {
+      if (node.tag === HostComponent || node.tag === HostText ||
+          node.tag === HostPortal) {
+        throw new Error('A coroutine cannot have host component children.');
+      } else if (node.tag === YieldComponent) {
+        yields.push(node.type);
+      } else if (node.child) {
+        // TODO: Coroutines need to visit the stateNode.
+        node.child.return = node;
+        node = node.child;
+        continue;
+      }
+      if (node === workInProgress) {
+        return;
+      }
+      while (!node.sibling) {
+        if (!node.return || node.return === workInProgress) {
+          return;
+        }
+        node = node.return;
+      }
+      node.sibling.return = node.return;
+      node = node.sibling;
     }
   }
 
@@ -101,11 +117,7 @@ module.exports = function<T, P, I, C>(config : HostConfig<T, P, I, C>) {
     // Build up the yields.
     // TODO: Compare this to a generator or opaque helpers like Children.
     var yields : Array<ReifiedYield> = [];
-    var child = workInProgress.child;
-    while (child) {
-      recursivelyFillYields(yields, child.output);
-      child = child.sibling;
-    }
+    appendAllYields(yields, workInProgress);
     var fn = coroutine.handler;
     var props = coroutine.props;
     var nextChildren = fn(props, yields);
@@ -113,7 +125,7 @@ module.exports = function<T, P, I, C>(config : HostConfig<T, P, I, C>) {
     var currentFirstChild = current ? current.stateNode : null;
     // Inherit the priority of the returnFiber.
     const priority = workInProgress.pendingWorkPriority;
-    workInProgress.stateNode = ReactChildFiber.reconcileChildFibers(
+    workInProgress.stateNode = reconcileChildFibers(
       workInProgress,
       currentFirstChild,
       nextChildren,
@@ -122,58 +134,180 @@ module.exports = function<T, P, I, C>(config : HostConfig<T, P, I, C>) {
     return workInProgress.stateNode;
   }
 
+  function appendAllChildren(parent : I, workInProgress : Fiber) {
+    // We only have the top Fiber that was created but we need recurse down its
+    // children to find all the terminal nodes.
+    let node = workInProgress.child;
+    while (node) {
+      if (node.tag === HostComponent || node.tag === HostText) {
+        appendInitialChild(parent, node.stateNode);
+      } else if (node.tag === HostPortal) {
+        // If we have a portal child, then we don't want to traverse
+        // down its children. Instead, we'll get insertions from each child in
+        // the portal directly.
+      } else if (node.child) {
+        // TODO: Coroutines need to visit the stateNode.
+        node = node.child;
+        continue;
+      }
+      if (node === workInProgress) {
+        return;
+      }
+      while (!node.sibling) {
+        if (!node.return || node.return === workInProgress) {
+          return;
+        }
+        node = node.return;
+      }
+      node = node.sibling;
+    }
+  }
+
   function completeWork(current : ?Fiber, workInProgress : Fiber) : ?Fiber {
+    if (__DEV__) {
+      ReactDebugCurrentFiber.current = workInProgress;
+    }
+
     switch (workInProgress.tag) {
       case FunctionalComponent:
-        console.log('/functional component', workInProgress.type.name);
-        transferOutput(workInProgress.child, workInProgress);
+        workInProgress.memoizedProps = workInProgress.pendingProps;
         return null;
-      case ClassComponent:
-        console.log('/class component', workInProgress.type.name);
-        transferOutput(workInProgress.child, workInProgress);
+      case ClassComponent: {
+        // We are leaving this subtree, so pop context if any.
+        popContextProvider(workInProgress);
+        // Don't use the state queue to compute the memoized state. We already
+        // merged it and assigned it to the instance. Transfer it from there.
+        // Also need to transfer the props, because pendingProps will be null
+        // in the case of an update.
+        const instance = workInProgress.stateNode;
+        workInProgress.memoizedState = instance.state;
+        workInProgress.memoizedProps = instance.props;
+
         return null;
-      case HostContainer:
-        transferOutput(workInProgress.child, workInProgress);
-        // We don't know if a container has updated any children so we always
-        // need to update it right now. We schedule this side-effect before
-        // all the other side-effects in the subtree. We need to schedule it
-        // before so that the entire tree is up-to-date before the life-cycles
-        // are invoked.
-        markForPreEffect(workInProgress);
+      }
+      case HostRoot: {
+        // TODO: Pop the host container after #8607 lands.
+        workInProgress.memoizedProps = workInProgress.pendingProps;
+        const fiberRoot = (workInProgress.stateNode : FiberRoot);
+        if (fiberRoot.pendingContext) {
+          fiberRoot.context = fiberRoot.pendingContext;
+          fiberRoot.pendingContext = null;
+        }
         return null;
+      }
       case HostComponent:
-        console.log('/host component', workInProgress.type);
-        const child = workInProgress.child;
-        const children = (child && !child.sibling) ? (child.output : ?Fiber | I) : child;
-        const newProps = workInProgress.pendingProps;
-        workInProgress.memoizedProps = newProps;
+        popHostContext(workInProgress);
+        const type = workInProgress.type;
+        let newProps = workInProgress.pendingProps;
         if (current && workInProgress.stateNode != null) {
           // If we have an alternate, that means this is an update and we need to
           // schedule a side-effect to do the updates.
           const oldProps = current.memoizedProps;
-          const instance : I = workInProgress.stateNode;
-          if (prepareUpdate(instance, oldProps, newProps, children)) {
-            // This returns true if there was something to update.
-            markForPreEffect(workInProgress);
+          // If we get updated because one of our children updated, we don't
+          // have newProps so we'll have to reuse them.
+          // TODO: Split the update API as separate for the props vs. children.
+          // Even better would be if children weren't special cased at all tho.
+          if (!newProps) {
+            newProps = workInProgress.memoizedProps || oldProps;
           }
-          workInProgress.output = instance;
+          const instance : I = workInProgress.stateNode;
+          const currentHostContext = getHostContext();
+          if (prepareUpdate(instance, type, oldProps, newProps, currentHostContext)) {
+            // This returns true if there was something to update.
+            markUpdate(workInProgress);
+          }
         } else {
-          const instance = createInstance(workInProgress.type, newProps, children);
-          // TODO: This seems like unnecessary duplication.
+          if (!newProps) {
+            if (workInProgress.stateNode === null) {
+              throw new Error('We must have new props for new mounts.');
+            } else {
+              // This can happen when we abort work.
+              return null;
+            }
+          }
+
+          const rootContainerInstance = getRootHostContainer();
+          const currentHostContext = getHostContext();
+          // TODO: Move createInstance to beginWork and keep it on a context
+          // "stack" as the parent. Then append children as we go in beginWork
+          // or completeWork depending on we want to add then top->down or
+          // bottom->up. Top->down is faster in IE11.
+          const instance = createInstance(
+            type,
+            newProps,
+            rootContainerInstance,
+            currentHostContext,
+            workInProgress
+          );
+
+          appendAllChildren(instance, workInProgress);
+
+          // Certain renderers require commit-time effects for initial mount.
+          // (eg DOM renderer supports auto-focus for certain elements).
+          // Make sure such renderers get scheduled for later work.
+          if (finalizeInitialChildren(instance, type, newProps, rootContainerInstance)) {
+            workInProgress.effectTag |= Update;
+          }
+
           workInProgress.stateNode = instance;
-          workInProgress.output = instance;
+          if (workInProgress.ref) {
+            // If there is a ref on a host node we need to schedule a callback
+            markUpdate(workInProgress);
+          }
         }
+        workInProgress.memoizedProps = newProps;
+        return null;
+      case HostText:
+        let newText = workInProgress.pendingProps;
+        if (current && workInProgress.stateNode != null) {
+          const oldText = current.memoizedProps;
+          if (newText === null) {
+            // If this was a bail out we need to fall back to memoized text.
+            // This works the same way as HostComponent.
+            newText = workInProgress.memoizedProps;
+            if (newText === null) {
+              newText = oldText;
+            }
+          }
+          // If we have an alternate, that means this is an update and we need
+          // to schedule a side-effect to do the updates.
+          if (oldText !== newText) {
+            markUpdate(workInProgress);
+          }
+        } else {
+          if (typeof newText !== 'string') {
+            if (workInProgress.stateNode === null) {
+              throw new Error('We must have new props for new mounts.');
+            } else {
+              // This can happen when we abort work.
+              return null;
+            }
+          }
+          const rootContainerInstance = getRootHostContainer();
+          const currentHostContext = getHostContext();
+          const textInstance = createTextInstance(newText, rootContainerInstance, currentHostContext, workInProgress);
+          workInProgress.stateNode = textInstance;
+        }
+        workInProgress.memoizedProps = newText;
         return null;
       case CoroutineComponent:
-        console.log('/coroutine component', workInProgress.pendingProps.handler.name);
         return moveCoroutineToHandlerPhase(current, workInProgress);
       case CoroutineHandlerPhase:
-        transferOutput(workInProgress.stateNode, workInProgress);
+        workInProgress.memoizedProps = workInProgress.pendingProps;
         // Reset the tag to now be a first phase coroutine.
         workInProgress.tag = CoroutineComponent;
         return null;
       case YieldComponent:
         // Does nothing.
+        return null;
+      case Fragment:
+        workInProgress.memoizedProps = workInProgress.pendingProps;
+        return null;
+      case HostPortal:
+        // TODO: Only mark this as an update if we have any pending callbacks.
+        markUpdate(workInProgress);
+        workInProgress.memoizedProps = workInProgress.pendingProps;
+        popHostContainer(workInProgress);
         return null;
 
       // Error cases

@@ -15,12 +15,12 @@
 import type { ReactYield } from 'ReactCoroutine';
 import type { Fiber } from 'ReactFiber';
 
-var ReactFiber = require('ReactFiber');
+var { createFiberFromElementType } = require('ReactFiber');
 
 export type ReifiedYield = { continuation: Fiber, props: Object };
 
 exports.createReifiedYield = function(yieldNode : ReactYield) : ReifiedYield {
-  var fiber = ReactFiber.createFiberFromElementType(
+  var fiber = createFiberFromElementType(
     yieldNode.continuation,
     yieldNode.key
   );
@@ -31,8 +31,15 @@ exports.createReifiedYield = function(yieldNode : ReactYield) : ReifiedYield {
 };
 
 exports.createUpdatedReifiedYield = function(previousYield : ReifiedYield, yieldNode : ReactYield) : ReifiedYield {
+  var fiber = previousYield.continuation;
+  if (fiber.type !== yieldNode.continuation) {
+    fiber = createFiberFromElementType(
+      yieldNode.continuation,
+      yieldNode.key
+    );
+  }
   return {
-    continuation: previousYield.continuation,
+    continuation: fiber,
     props: yieldNode.props,
   };
 };

@@ -33,7 +33,7 @@ export type ReactCoroutine = {
   children: any,
   // This should be a more specific CoroutineHandler
   handler: (props: any, yields: Array<ReifiedYield>) => ReactNodeList,
-  props: mixed,
+  props: any,
 };
 export type ReactYield = {
   $$typeof: Symbol | number,

@@ -20,7 +20,7 @@ describe('ReactComponentTreeHook', () => {
   var ReactComponentTreeTestUtils;
 
   beforeEach(() => {
-    jest.resetModuleRegistry();
+    jest.resetModules();
 
     React = require('React');
     ReactDOM = require('ReactDOM');
@@ -46,14 +46,19 @@ describe('ReactComponentTreeHook', () => {
       }
     }
 
-    function expectWrapperTreeToEqual(expectedTree) {
+    function expectWrapperTreeToEqual(expectedTree, andStayMounted) {
       ReactComponentTreeTestUtils.expectTree(rootInstance._debugID, {
         displayName: 'Wrapper',
         children: expectedTree ? [expectedTree] : [],
       });
+      var rootDisplayNames = ReactComponentTreeTestUtils.getRootDisplayNames();
+      var registeredDisplayNames = ReactComponentTreeTestUtils.getRegisteredDisplayNames();
       if (!expectedTree) {
-        expect(ReactComponentTreeTestUtils.getRootDisplayNames()).toEqual([]);
-        expect(ReactComponentTreeTestUtils.getRegisteredDisplayNames()).toEqual([]);
+        expectDev(rootDisplayNames).toEqual([]);
+        expectDev(registeredDisplayNames).toEqual([]);
+      } else if (andStayMounted) {
+        expectDev(rootDisplayNames).toContain('Wrapper');
+        expectDev(registeredDisplayNames).toContain('Wrapper');
       }
     }
 
@@ -64,12 +69,12 @@ describe('ReactComponentTreeHook', () => {
 
       // Mount a new tree or update the existing tree.
       ReactDOM.render(<Wrapper />, node);
-      expectWrapperTreeToEqual(expectedTree);
+      expectWrapperTreeToEqual(expectedTree, true);
 
       // Purging should have no effect
       // on the tree we expect to see.
       ReactComponentTreeHook.purgeUnmountedComponents();
-      expectWrapperTreeToEqual(expectedTree);
+      expectWrapperTreeToEqual(expectedTree, true);
     });
 
     // Unmounting the root node should purge
@@ -1687,38 +1692,48 @@ describe('ReactComponentTreeHook', () => {
 
     ReactDOM.render(<div className="a" />, node);
     var divID = ReactComponentTreeHook.getRootIDs()[0];
-    expect(ReactComponentTreeHook.getUpdateCount(divID)).toEqual(0);
+    expectDev(ReactComponentTreeHook.getUpdateCount(divID)).toEqual(0);
 
     ReactDOM.render(<span className="a" />, node);
     var spanID = ReactComponentTreeHook.getRootIDs()[0];
-    expect(ReactComponentTreeHook.getUpdateCount(divID)).toEqual(0);
-    expect(ReactComponentTreeHook.getUpdateCount(spanID)).toEqual(0);
+    expectDev(ReactComponentTreeHook.getUpdateCount(divID)).toEqual(0);
+    expectDev(ReactComponentTreeHook.getUpdateCount(spanID)).toEqual(0);
 
     ReactDOM.render(<span className="b" />, node);
-    expect(ReactComponentTreeHook.getUpdateCount(divID)).toEqual(0);
-    expect(ReactComponentTreeHook.getUpdateCount(spanID)).toEqual(1);
+    expectDev(ReactComponentTreeHook.getUpdateCount(divID)).toEqual(0);
+    expectDev(ReactComponentTreeHook.getUpdateCount(spanID)).toEqual(1);
 
     ReactDOM.render(<span className="c" />, node);
-    expect(ReactComponentTreeHook.getUpdateCount(divID)).toEqual(0);
-    expect(ReactComponentTreeHook.getUpdateCount(spanID)).toEqual(2);
+    expectDev(ReactComponentTreeHook.getUpdateCount(divID)).toEqual(0);
+    expectDev(ReactComponentTreeHook.getUpdateCount(spanID)).toEqual(2);
 
     ReactDOM.unmountComponentAtNode(node);
-    expect(ReactComponentTreeHook.getUpdateCount(divID)).toEqual(0);
-    expect(ReactComponentTreeHook.getUpdateCount(spanID)).toEqual(0);
+    expectDev(ReactComponentTreeHook.getUpdateCount(divID)).toEqual(0);
+    expectDev(ReactComponentTreeHook.getUpdateCount(spanID)).toEqual(0);
   });
 
   it('does not report top-level wrapper as a root', () => {
     var node = document.createElement('div');
 
     ReactDOM.render(<div className="a" />, node);
-    expect(ReactComponentTreeTestUtils.getRootDisplayNames()).toEqual(['div']);
+    expectDev(ReactComponentTreeTestUtils.getRootDisplayNames()).toEqual(['div']);
 
     ReactDOM.render(<div className="b" />, node);
-    expect(ReactComponentTreeTestUtils.getRootDisplayNames()).toEqual(['div']);
+    expectDev(ReactComponentTreeTestUtils.getRootDisplayNames()).toEqual(['div']);
 
     ReactDOM.unmountComponentAtNode(node);
-    expect(ReactComponentTreeTestUtils.getRootDisplayNames()).toEqual([]);
-    expect(ReactComponentTreeTestUtils.getRegisteredDisplayNames()).toEqual([]);
+    expectDev(ReactComponentTreeTestUtils.getRootDisplayNames()).toEqual([]);
+    expectDev(ReactComponentTreeTestUtils.getRegisteredDisplayNames()).toEqual([]);
+  });
+
+  it('registers inlined text nodes', () => {
+    var node = document.createElement('div');
+
+    ReactDOM.render(<div>hi</div>, node);
+    expectDev(ReactComponentTreeTestUtils.getRegisteredDisplayNames()).toEqual(['div', '#text']);
+
+    ReactDOM.unmountComponentAtNode(node);
+    expectDev(ReactComponentTreeTestUtils.getRegisteredDisplayNames()).toEqual([]);
   });
 
   describe('stack addenda', () => {
@@ -1731,19 +1746,19 @@ describe('ReactComponentTreeHook', () => {
       var Anon = React.createClass({displayName: null, render: () => null});
       var Orange = React.createClass({render: () => null});
 
-      expect(getAddendum()).toBe(
+      expectDev(getAddendum()).toBe(
         ''
       );
-      expect(getAddendum(<div />)).toBe(
+      expectDev(getAddendum(<div />)).toBe(
         '\n    in div (at **)'
       );
-      expect(getAddendum(<Anon />)).toBe(
+      expectDev(getAddendum(<Anon />)).toBe(
         '\n    in Unknown (at **)'
       );
-      expect(getAddendum(<Orange />)).toBe(
+      expectDev(getAddendum(<Orange />)).toBe(
         '\n    in Orange (at **)'
       );
-      expect(getAddendum(React.createElement(Orange))).toBe(
+      expectDev(getAddendum(React.createElement(Orange))).toBe(
         '\n    in Orange'
       );
 
@@ -1763,20 +1778,20 @@ describe('ReactComponentTreeHook', () => {
           this.forceUpdate();
         }
         render() {
-          expect(getAddendum()).toBe(
+          expectDev(getAddendum()).toBe(
             '\n    in S (at **)' +
             '\n    in div (at **)' +
             '\n    in R (created by Q)' +
             '\n    in Q (at **)'
           );
-          expect(getAddendum(<span />)).toBe(
+          expectDev(getAddendum(<span />)).toBe(
             '\n    in span (at **)' +
             '\n    in S (at **)' +
             '\n    in div (at **)' +
             '\n    in R (created by Q)' +
             '\n    in Q (at **)'
           );
-          expect(getAddendum(React.createElement('span'))).toBe(
+          expectDev(getAddendum(React.createElement('span'))).toBe(
             '\n    in span (created by S)' +
             '\n    in S (at **)' +
             '\n    in div (at **)' +
@@ -1788,10 +1803,10 @@ describe('ReactComponentTreeHook', () => {
         }
       }
       ReactDOM.render(<Q />, document.createElement('div'));
-      expect(renders).toBe(2);
+      expectDev(renders).toBe(2);
 
       // Make sure owner is fetched for the top element too.
-      expect(getAddendum(rOwnedByQ)).toBe(
+      expectDev(getAddendum(rOwnedByQ)).toBe(
         '\n    in R (created by Q)'
       );
     });
@@ -1809,14 +1824,14 @@ describe('ReactComponentTreeHook', () => {
       }
 
       var q = ReactDOM.render(<Q />, document.createElement('div'));
-      expect(getAddendum(ReactInstanceMap.get(q)._debugID)).toBe(
+      expectDev(getAddendum(ReactInstanceMap.get(q)._debugID)).toBe(
         '\n    in Q (at **)'
       );
 
       spyOn(console, 'error');
       getAddendum(-17);
-      expect(console.error.calls.count()).toBe(1);
-      expect(console.error.calls.argsFor(0)[0]).toBe(
+      expectDev(console.error.calls.count()).toBe(1);
+      expectDev(console.error.calls.argsFor(0)[0]).toBe(
         'Warning: ReactComponentTreeHook: Missing React element for ' +
         'debugID -17 when building stack'
       );
@@ -1852,6 +1867,113 @@ describe('ReactComponentTreeHook', () => {
         }
       }
       ReactDOM.render(<Foo />, el);
+    });
+  });
+
+  describe('in environment without Map, Set and Array.from', () => {
+    var realMap;
+    var realSet;
+    var realArrayFrom;
+
+    beforeEach(() => {
+      realMap = global.Map;
+      realSet = global.Set;
+      realArrayFrom = Array.from;
+
+      global.Map = undefined;
+      global.Set = undefined;
+      Array.from = undefined;
+
+      jest.resetModules();
+
+      React = require('React');
+      ReactDOM = require('ReactDOM');
+      ReactDOMServer = require('ReactDOMServer');
+      ReactInstanceMap = require('ReactInstanceMap');
+      ReactComponentTreeHook = require('ReactComponentTreeHook');
+      ReactComponentTreeTestUtils = require('ReactComponentTreeTestUtils');
+    });
+
+    afterEach(() => {
+      global.Map = realMap;
+      global.Set = realSet;
+      Array.from = realArrayFrom;
+    });
+
+    it('works', () => {
+      class Qux extends React.Component {
+        render() {
+          return null;
+        }
+      }
+
+      function Foo() {
+        return {
+          render() {
+            return <Qux />;
+          },
+        };
+      }
+      function Bar({children}) {
+        return <h1>{children}</h1>;
+      }
+      class Baz extends React.Component {
+        render() {
+          return (
+            <div>
+              <Foo />
+              <Bar>
+                <span>Hi,</span>
+                Mom
+              </Bar>
+              <a href="#">Click me.</a>
+            </div>
+          );
+        }
+      }
+
+      var element = <Baz />;
+      var tree = {
+        displayName: 'Baz',
+        element,
+        children: [{
+          displayName: 'div',
+          children: [{
+            displayName: 'Foo',
+            element: <Foo />,
+            children: [{
+              displayName: 'Qux',
+              element: <Qux />,
+              children: [],
+            }],
+          }, {
+            displayName: 'Bar',
+            children: [{
+              displayName: 'h1',
+              children: [{
+                displayName: 'span',
+                children: [{
+                  displayName: '#text',
+                  element: 'Hi,',
+                  text: 'Hi,',
+                }],
+              }, {
+                displayName: '#text',
+                text: 'Mom',
+                element: 'Mom',
+              }],
+            }],
+          }, {
+            displayName: 'a',
+            children: [{
+              displayName: '#text',
+              text: 'Click me.',
+              element: 'Click me.',
+            }],
+          }],
+        }],
+      };
+      assertTreeMatches([element, tree]);
     });
   });
 });
